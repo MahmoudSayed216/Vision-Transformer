@@ -3,11 +3,12 @@ import torch
 
 model = VisionTransformer("s")
 
-print(model)
+# print(model)
+for name, layer in model.named_children():
+    print(name, "->", layer)
 
+model.eval()
 
-# model.eval()
+tensor = torch.randn(size=(10, 3, 224, 224))
 
-# tensor = torch.randn(size=(10, 3, 224, 224))
-
-# print(model(tensor))
+print(model(tensor))

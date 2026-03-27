@@ -6,13 +6,13 @@ from ViT.positional_encoding import PositionalEncoder
 
 
 class PatchEncoder(nn.Module):
-    def __init__(self, in_features, patch_side_length, hidden_dim, n_pathces):
+    def __init__(self, in_features, patch_side_length, hidden_dim, n_patches):
         super().__init__()
 
         self.conv = nn.Conv2d(in_channels=in_features, out_channels=hidden_dim, kernel_size=patch_side_length, stride=patch_side_length)
         self.patch_side_length = patch_side_length
         self.hiddem_dim = hidden_dim
-        self.n_pathces = n_pathces
+        self.n_patches = n_patches
     def forward(self, x):
         B, C, W, H = x.shape
         x = self.conv(x)
@@ -34,26 +34,29 @@ class VisionTransformer(nn.Module):
         self.mlp_head_dim = {"s": 3072, "m":4096, "l":5120}[size]
         self.n_heads = {"s": 12, "m":16, "l":16}[size]
         self.patch_dim = 16
-        self.n_pathces = int((224**2)/(16**2))+1 # for the [CLS] token
+        self.n_patches = int((224**2)/(16**2))+1 # for the [CLS] token
 
         self.class_token = nn.Parameter(torch.zeros(1, 1, self.hidden_dim))
 
         self.patch_encoder = nn.Linear(in_features=self.patch_dim**2, out_features=self.hidden_dim)
-        self.patch_encoder = PatchEncoder(3, self.patch_dim, self.hidden_dim, n_pathces=self.n_pathces)
-        self.pos_encoder = PositionalEncoder(embed_dim=self.hidden_dim, n_patches=self.n_pathces+1)
+        self.patch_encoder = PatchEncoder(3, self.patch_dim, self.hidden_dim, n_patches=self.n_patches-1)
+        self.pos_encoder = PositionalEncoder(embed_dim=self.hidden_dim, n_patches=self.n_patches)
 
-        self.transformer_encoder = ViTEncoder(n_layers=self.n_layers, n_heads=self.n_heads, hidden_dim=self.hidden_dim)
-        self.mlp_head = nn.Linear(in_features=self.hidden_dim, out_features=self.mlp_head_dim)
-        self.classification_head = nn.Linear(in_features=self.mlp_head_dim, out_features=1000)
+        self.transformer_encoder = ViTEncoder(n_layers=self.n_layers, n_heads=self.n_heads, hidden_dim=self.hidden_dim, mlp_head_dim = self.mlp_head_dim)
+        self.norm = nn.LayerNorm(normalized_shape=self.hidden_dim, eps=1e-6)
+        self.classification_head = nn.Linear(in_features=self.hidden_dim, out_features=1000)
 
         ##TODO: add a patch of zeros of [CLS] token
 
     def forward(self, x):
         x = self.patch_encoder(x)
+
+        batch_size = x.shape[0]
+        x = torch.cat([self.class_token.expand(batch_size, -1, -1), x], dim=1)
+
         x = self.pos_encoder(x)
         x = self.transformer_encoder(x)
         x = x[:, 0]
-        x = self.mlp_head(x)
         x = self.classification_head(x)
         return x
         #? probably needs a softmax ? 
@@ -86,39 +89,48 @@ class MLPBlock(nn.Module):
         return o+x
 
 
-
-class EncoderBlock(nn.Module):
-    def __init__(self, hidden_dim, n_heads, dropout, attention_dropout, mlp_head_dim):
+class SelfAttentionBlock(nn.Module):
+    def __init__(self, hidden_dim, n_heads, attention_dropout, dropout):
         super().__init__()
         self.norm1 = nn.LayerNorm(normalized_shape=hidden_dim, eps=1e-6)
         self.attention = nn.MultiheadAttention(hidden_dim, num_heads=n_heads, dropout=attention_dropout, batch_first=True)
         self.dropout = nn.Dropout(p=dropout)
-        # self.mlp = nn.Linear(in_features=hidden_dim, out_features=hidden_dim)
-        self.mlp_block = MLPBlock(hidden_dim, mlp_head_dim)
-        
+
+
     def forward(self, x):
         o = self.norm1(x)
-        o, _ = self.attention(o)
+        o, _ = self.attention(o, o, o, need_weights=False)
         o = self.dropout(o)
         x = x + o
-        o = self.norm2(x)
-        o = self.mlp_block(x)
-        return x+o
+        return x
 
+class EncoderBlock(nn.Module):
+    def __init__(self, hidden_dim, n_heads, dropout, attention_dropout, mlp_head_dim):
+        super().__init__()
+        # self.mlp = nn.Linear(in_features=hidden_dim, out_features=hidden_dim)
+        self.attention = SelfAttentionBlock(hidden_dim=hidden_dim, n_heads=n_heads, attention_dropout=attention_dropout, dropout=dropout)
+        self.mlp_block = MLPBlock(hidden_dim, mlp_head_dim, dropout=dropout)
+        
+    def forward(self, x):
+        o = self.attention(x)
+        o = self.mlp_block(o)
+        return o
 
 
 class ViTEncoder(nn.Module):
 
-    def __init__(self, n_layers, n_heads, hidden_dim):
+    def __init__(self, n_layers, n_heads, hidden_dim, mlp_head_dim):
         super().__init__()
 
-        self.dropout = 0.1
-        self.attention_dropout = 0.1
+        self.dropout = 0.0
+        self.attention_dropout = 0.0
 
 
-        self.blocks = nn.Sequential(*[EncoderBlock(hidden_dim=hidden_dim, n_heads=n_heads, dropout=self.dropout, attention_dropout=self.attention_dropout ) for _ in range(n_layers)])
+        self.blocks = nn.Sequential(*[EncoderBlock(hidden_dim=hidden_dim, n_heads=n_heads, dropout=self.dropout, attention_dropout=self.attention_dropout, mlp_head_dim=mlp_head_dim) for _ in range(n_layers)])
 
 
     def forward(self, x):
 
         return self.blocks(x)
+    
+
