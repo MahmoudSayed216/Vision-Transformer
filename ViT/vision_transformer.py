@@ -56,6 +56,7 @@ class VisionTransformer(nn.Module):
 
         x = self.pos_encoder(x)
         x = self.transformer_encoder(x)
+        x = self.norm(x)
         x = x[:, 0]
         x = self.classification_head(x)
         return x
